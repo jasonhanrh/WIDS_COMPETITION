@@ -1,0 +1,80 @@
+---
+title: "EDA_WIDS"
+author: "Ruihang_Han"
+date: "2025-04-21"
+output: html_document
+---
+
+
+```{r}
+# --------------------------------------------------
+# WiDS 2025 - 并行加速全量训练集提取（推荐跑一次保存 .rds）
+# --------------------------------------------------
+
+library(tidyverse)
+library(readr)
+library(stringr)
+library(fs)
+library(furrr)    # 并行 map
+library(future)   # 设置 worker 策略
+
+# 1. 设置路径
+metadata_path <- "metadata/training_metadata.csv"
+tsv_dir <- "train_tsv"
+output_path_csv <- "train_df.csv"
+output_path_rds <- "train_df.rds"
+
+# 2. 并行策略设置（使用多核）
+plan(multisession, workers = parallel::detectCores())  # 自动根据 CPU 使用所有核心
+
+# 3. 读取 metadata
+train_meta <- read_csv(metadata_path, show_col_types = FALSE)
+
+# 4. 获取所有 .tsv 文件中能和 metadata 匹配的
+tsv_files_all <- dir_ls(tsv_dir, glob = "*.tsv")
+valid_files <- tsv_files_all[
+  map_chr(tsv_files_all, ~ str_extract(basename(.x), "(?<=sub-)[^_]+")) %in% train_meta$participant_id
+]
+
+# 5. 定义特征提取函数（提取上三角 + 生成 row tibble）
+extract_tsv_row <- function(file) {
+  pid <- str_extract(basename(file), "(?<=sub-)[^_]+")
+  mat <- tryCatch(
+    as.matrix(read_tsv(file, col_names = FALSE, progress = FALSE)),
+    error = function(e) return(NULL)
+  )
+  if (is.null(mat)) return(NULL)
+  vec <- mat[upper.tri(mat)]
+  tibble(participant_id = pid,
+         !!!set_names(as.list(vec), paste0("V", seq_along(vec))))
+}
+
+# 6. 使用并行 map 处理全部文件
+train_features <- future_map(valid_files, extract_tsv_row, .progress = TRUE) %>%
+  compact() %>% bind_rows()
+
+# 7. 合并 metadata
+train_df <- train_features %>%
+  inner_join(train_meta, by = "participant_id")
+
+# 8. 保存结果（CSV + RDS）
+write_csv(train_df, output_path_csv)
+saveRDS(train_df, output_path_rds)
+
+cat("✅ 全部样本处理完成，共", nrow(train_df), "行，保存至：\n",
+    "→ ", output_path_csv, "\n",
+    "→ ", output_path_rds, "\n")
+
+```
+
+```{r}
+# 8. 保存结果（CSV + RDS）
+output_path_csv <- "train_df.csv"
+output_path_rds <- "train_df.rds"
+write_csv(train_df, output_path_csv)
+saveRDS(train_df, output_path_rds)
+
+cat("✅ 全部样本处理完成，共", nrow(train_df), "行，保存至：\n",
+    "→ ", output_path_csv, "\n",
+    "→ ", output_path_rds, "\n")
+```
