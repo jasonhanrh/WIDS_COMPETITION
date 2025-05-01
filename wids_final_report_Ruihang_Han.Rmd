@@ -24,9 +24,199 @@ set.seed(42)
 
 *To be completed: Describe the dataset structure, variable types (connectome features, metadata), missing value handling, PCA for feature reduction, and creation of training and validation sets.*
 
+The dataset comprises 1,104 adolescent participants aged 5 to 21 years, each represented by two main data sources: a 200×200 functional connectome matrix (upper triangular vectorized into \~20,000 features per individual) and rich metadata including demographic, psychological, and physiological attributes. The dataset was ingested from a CSV file and loaded into a `train_df` dataframe.
+
+To understand the structural composition, we examined the dimensionality and variable types:
+
+```{r}
+dim(train_df)
+colnames(train_df)[1:20]
+tail(colnames(train_df), 20)
+head(train_df[, 1:10])
+table(sapply(train_df, class))
+```
+
+The dataframe contains 1,104 observations and nearly 20,000 columns, dominated by vectorized brain connectivity features (V\*) and supplemented by metadata fields. Data types span numeric and categorical variables, requiring both standard preprocessing and encoding for modeling purposes.
+
+We assessed the extent of missing values across the dataset to guide appropriate imputation strategies:
+
+```{r}
+total_missing <- sum(is.na(train_df))
+missing_ratio <- total_missing / (nrow(train_df) * ncol(train_df))
+cat("Total missing values:", total_missing, "\n")
+cat("Missing ratio:", round(missing_ratio * 100, 2), "%\n")
+
+missing_cols <- colSums(is.na(train_df))
+missing_cols[missing_cols > 0] %>% sort(decreasing = TRUE) %>% head(10)
+```
+
+Although the dataset includes 500 missing entries, this represents less than 0.01% of the data. Most missingness is concentrated in demographic variables such as parent_1_education (183 missing), race (168), and ethnicity (109). Given the sparse and localized nature of these missing values, we adopted tailored strategies such as median imputation for numeric fields and introducing “Missing” as a valid level for categorical variables during metadata preprocessing.
+
 # 3. Exploratory Data Analysis (EDA)
 
 *To be completed: Provide summary statistics, variable distributions, and visualizations (e.g., PCA scatterplots, correlation heatmaps) to reveal patterns in metadata and connectome data.*
+
+## 3.1 Demographic Variable Distributions
+
+We began by examining categorical metadata to understand the demographic makeup of the dataset. Frequency counts and bar plots reveal the distribution across variables such as sex, race, handedness, study site, and parental education.
+
+```{r}
+# Frequency counts
+list(
+  sex = table(train_df$sex),
+  race = table(train_df$race),
+  handedness = table(train_df$handedness),
+  study_site = table(train_df$study_site),
+  ethnicity = table(train_df$ethnicity),
+  parent_1_education = table(train_df$parent_1_education),
+  parent_2_education = table(train_df$parent_2_education)
+)
+```
+
+```{r}
+# Visual summaries
+ggplot(train_df, aes(x = sex)) + geom_bar(fill = "#66c2a5") + labs(title = "Sex Distribution") + theme_minimal()
+ggplot(train_df, aes(x = race)) + geom_bar(fill = "#fc8d62") + labs(title = "Race Distribution") + theme_minimal()
+ggplot(train_df, aes(x = handedness)) + geom_bar(fill = "#8da0cb") + labs(title = "Handedness Distribution") + theme_minimal()
+ggplot(train_df, aes(x = study_site)) + geom_bar(fill = "#e78ac3") + labs(title = "Study Site Distribution") + theme_minimal()
+ggplot(train_df, aes(x = parent_1_education)) + geom_bar(fill = "darkgreen") + labs(title = "Parent 1 Education", x = "Education Level") + theme(axis.text.x = element_text(angle = 45)) + theme_minimal()
+```
+
+The dataset reveals a moderate gender imbalance (688 males vs. 416 females), and a predominantly right-handed population. White is the most common race, followed by Other, Black, and Asian groups. Most participants were recruited from HBNsiteRU and HBNsiteCBIC, while parental education levels skew toward tertiary completion.
+
+We examined potential interactions between sex and race using a mosaic plot:
+
+```{r}
+ggplot(data = train_df) +
+  geom_mosaic(aes(weight = 1, x = product(sex), fill = race)) +
+  labs(title = "Mosaic Plot: Sex vs Race", x = "Sex", fill = "Race") +
+  theme_minimal()
+```
+
+Race distribution is largely consistent across sex categories. White participants are the majority in both groups, followed by Other and Black. This consistency suggests minimal interaction between race and sex in this sample.
+
+## 3.2 Summary Statistics of Continuous Variables
+
+We summarized key continuous variables—age, BMI, and standardized psychological factors—using descriptive statistics.
+
+```{r}
+numeric_summary <- train_df %>%
+  select(age, bmi, p_factor_fs, internalizing_fs, externalizing_fs, attention_fs) %>%
+  summary()
+numeric_summary
+```
+
+Participants range in age from approximately 5 to 22 years (mean ≈ 11.2), with BMI spanning from 12.6 to 46.1. Mental health scores are z-scored and exhibit moderate variability. The distributions provide a foundation for modeling age while accounting for psychological and developmental diversity.
+
+## 3.3 Age and BMI Trends
+
+To further explore distributional trends and group differences, we visualized age, BMI, and their interactions across demographic groups.
+
+```{r}
+# Age by sex
+ggplot(train_df, aes(x = age, fill = as.factor(sex))) +
+  geom_histogram(position = "dodge", bins = 30) +
+  labs(title = "Age Distribution by Sex", x = "Age", fill = "Sex") +
+  theme_minimal()
+
+# BMI vs Age
+ggplot(train_df, aes(x = age, y = bmi, color = as.factor(sex))) +
+  geom_point(alpha = 0.5) +
+  labs(title = "BMI vs Age by Sex", x = "Age", y = "BMI", color = "Sex") +
+  theme_minimal()
+
+# BMI by Race
+ggplot(train_df, aes(x = race, y = bmi, fill = race)) +
+  geom_boxplot() +
+  labs(title = "BMI Distribution by Race") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45))
+```
+
+Age shows a right-skewed distribution, concentrated in early adolescence. BMI increases slightly with age, and distributions vary across races, with Asian participants showing the lowest median BMI and Black participants displaying wider dispersion.
+
+## 3.4 Psychological Factors and Group Differences
+
+We examined the structure and sex-based distribution of psychological scores, including the general psychopathology factor (`p_factor_fs`) and three specific domains: internalizing, externalizing, and attention.
+
+```{r}
+# Correlation matrix of mental health scores
+train_df %>% 
+  select(p_factor_fs, internalizing_fs, externalizing_fs, attention_fs) %>%
+  ggpairs(title = "Correlation between Mental Health Factors")
+
+```
+
+The correlation matrix reveals that p-factor is moderately correlated with internalizing (r ≈ 0.20) and externalizing (r ≈ 0.27), while attention shows weak or inverse correlations, indicating relative independence from mood and behavior symptoms.
+
+```{r}
+# Mean psychological scores by sex
+train_df %>%
+  group_by(sex) %>%
+  summarise(across(c(p_factor_fs, internalizing_fs, externalizing_fs, attention_fs), mean, na.rm = TRUE)) %>%
+  pivot_longer(-sex, names_to = "Factor", values_to = "Mean_Score") %>%
+  ggplot(aes(x = Factor, y = Mean_Score, fill = sex)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Average Mental Health Scores by Sex") +
+  theme_minimal()
+```
+
+Females report higher internalizing and p-factor scores, while males display more externalizing and attention-related symptoms. These patterns align with developmental trends observed in clinical literature.
+
+```{r}
+# Attention score by sex
+ggplot(train_df, aes(x = sex, y = attention_fs, fill = sex)) +
+  geom_boxplot() +
+  labs(title = "Attention Score by Sex", x = "Sex", y = "Attention Factor Score") +
+  theme_minimal()
+
+# Optional: Age vs p-factor
+ggplot(train_df, aes(x = age, y = p_factor_fs)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(title = "Age vs P-Factor", y = "P-Factor") +
+  theme_minimal()
+```
+
+There is no substantial age-based trend in p-factor scores, suggesting general psychological distress levels remain relatively stable throughout the sampled age range.
+
+## 3.5 Correlation Matrix of Continuous Predictors
+
+We constructed a correlation heatmap across key continuous predictors to identify linear dependencies and potential multicollinearity:
+
+```{r}
+selected_vars <- train_df %>%
+  select(age, bmi, p_factor_fs, internalizing_fs, externalizing_fs, attention_fs)
+
+cor_matrix <- cor(selected_vars, use = "complete.obs")
+corrplot(cor_matrix, method = "color", type = "lower", addCoef.col = "black", number.cex = 0.7,
+         title = "Correlation Matrix of Selected Variables", mar = c(0, 0, 1, 0))
+```
+
+BMI and age exhibit a moderate positive correlation (r = 0.51). The mental health variables show relatively weak correlations, suggesting independent symptom dimensions and supporting their separate inclusion in modeling frameworks.
+
+## 3.6 PCA of Brain Connectivity Features
+
+We applied PCA to the high-dimensional connectome feature space to visualize dominant sources of variability.
+
+```{r}
+brain_data <- train_df %>% select(starts_with("V"))
+pca_result <- prcomp(brain_data, center = TRUE, scale. = TRUE)
+pca_df <- as.data.frame(pca_result$x[, 1:2])
+pca_df$sex <- train_df$sex
+
+ggplot(pca_df, aes(x = PC1, y = PC2, color = sex)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "2D PCA Projection of Brain Functional Connectivity",
+    x = "Principal Component 1",
+    y = "Principal Component 2",
+    color = "Sex"
+  ) +
+  theme_minimal()
+```
+
+The PCA projection reveals no major clustering or separation by sex, indicating that sex does not explain a large portion of variance in the first two components. Brain connectivity variation appears to be more individually driven or spread across higher-order dimensions.
 
 # 4. Modeling and Prediction
 
@@ -490,6 +680,7 @@ ggplot(data.frame(Residual = resid_ensemble), aes(x = Residual)) +
   )
 
 ```
+
 The residual distributions of the Ridge, XGBoost, and Ensemble models provide insights into the prediction error characteristics of each approach. The Ridge model exhibits a wide and relatively symmetric residual spread, but with heavier tails, indicating higher variance in its predictions. The XGBoost model, while achieving lower RMSE, shows a left-skewed residual distribution, suggesting a tendency to overestimate the target variable (age). Notably, the ensemble model combining Ridge and XGBoost achieves the most compact and symmetric residual distribution, reflecting reduced bias and variance. This improvement demonstrates the effectiveness of model ensembling in enhancing predictive stability and accuracy.
 
 ## 4.11 Stacking Ensemble & Residual Diagnostics
