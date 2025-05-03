@@ -27,30 +27,59 @@ We employ multiple machine learning approaches, including Ridge regression and X
 Our goal is twofold: (1) to achieve robust brain-age prediction and (2) to uncover interpretable sex differences in functional brain development, contributing to a better understanding of normative and atypical trajectories during youth.
 
 
-# 2. Data and Preprocessing
+## 2.1 Parallel Extraction of Brain Connectivity Features
 
-The dataset comprises 1,104 adolescent participants aged 5 to 21 years, each represented by two main data sources: a 200×200 functional connectome matrix (upper triangular vectorized into \~20,000 features per individual) and rich metadata including demographic, psychological, and physiological attributes. The dataset was ingested from a CSV file and loaded into a `train_df` dataframe.
-
-To understand the structural composition, we examined the dimensionality and variable types:
+To efficiently process the large number of `.tsv` files in the `train_tsv` directory, we implemented a parallelized pipeline using the `furrr` and `future` packages. Each file corresponds to one subject and contains their 200×200 functional connectivity matrix.
 
 ```{r}
-library(tidyverse)
-library(ggplot2)
-library(GGally)
-library(ggmosaic)
-library(corrplot)
+# Parallel extraction from .tsv files
+plan(multisession, workers = parallel::detectCores())
 
-train_df <- readRDS("train_df.rds")
+# Load and extract upper-triangular connectome vectors
+extract_tsv_row <- function(file) {
+  pid <- str_extract(basename(file), "(?<=sub-)[^_]+")
+  mat <- tryCatch(read_tsv(file, col_names = FALSE, progress = FALSE) %>% as.matrix(), error = function(e) NULL)
+  if (is.null(mat)) return(NULL)
+  vec <- mat[upper.tri(mat)]
+  tibble(participant_id = pid, !!!set_names(as.list(vec), paste0("V", seq_along(vec))))
+}
+
+# Apply in parallel to valid .tsv files
+train_features <- future_map(valid_files, extract_tsv_row, .progress = TRUE) %>%
+  compact() %>%
+  bind_rows()
+```
+
+The output is a dataframe where each row corresponds to a participant and each column `V1` to `V19900+` represents a correlation between two brain regions. This structure captures the functional architecture of the brain in a high-dimensional feature space.
+
+## 2.2 Merging with Metadata
+
+After extracting connectivity features, we merged the results with the corresponding metadata from `training_metadata.csv`. Metadata fields include age (target variable), sex, race, ethnicity, BMI, parental education, handedness, study site, and four z-scored psychological factors (p-factor, internalizing, externalizing, attention).
+
+```{r}
+# Merge brain features with metadata
+train_df <- train_features %>%
+  inner_join(train_meta, by = "participant_id")
+
+# Save final dataset
+write_csv(train_df, "train_df.csv")
+saveRDS(train_df, "train_df.rds")
+```
+
+This process yielded a modeling-ready dataset (`train_df`) with 1,104 participants and nearly 20,000 features. The final object was stored both as CSV and compressed `.rds` for faster downstream access.
+
+## 2.3 Data Structure and Missing Values
+
+We conducted a structural check of the merged dataset to verify dimensions, column types, and missingness.
+
+```{r}
 dim(train_df)
-colnames(train_df)[1:20]
-tail(colnames(train_df), 20)
-head(train_df[, 1:10])
 table(sapply(train_df, class))
 ```
 
-The dataframe contains 1,104 observations and nearly 20,000 columns, dominated by vectorized brain connectivity features (V\*) and supplemented by metadata fields. Data types span numeric and categorical variables, requiring both standard preprocessing and encoding for modeling purposes.
+The dataset contains 1,104 rows and 20,000+ columns, primarily composed of numeric features from the connectome and a combination of numeric and categorical metadata.
 
-We assessed the extent of missing values across the dataset to guide appropriate imputation strategies:
+Missing value analysis revealed that:
 
 ```{r}
 total_missing <- sum(is.na(train_df))
@@ -62,7 +91,16 @@ missing_cols <- colSums(is.na(train_df))
 missing_cols[missing_cols > 0] %>% sort(decreasing = TRUE) %>% head(10)
 ```
 
-Although the dataset includes 500 missing entries, this represents less than 0.01% of the data. Most missingness is concentrated in demographic variables such as parent_1_education (183 missing), race (168), and ethnicity (109). Given the sparse and localized nature of these missing values, we adopted tailored strategies such as median imputation for numeric fields and introducing “Missing” as a valid level for categorical variables during metadata preprocessing.
+Only 500 values were missing (\<0.01% overall). These were mostly limited to metadata fields like `parent_1_education`, `race`, and `ethnicity`. During preprocessing, continuous variables (e.g., BMI) were imputed using the median, while missing levels in categorical variables were handled by creating an explicit `"Missing"` category, preserving potential patterns related to nonresponse.
+
+This pipeline effectively combined:
+
+-   Scalable parallel extraction of functional connectivity features,
+-   Rich metadata integration, and
+-   Targeted missing value handling.
+
+The resulting dataset was ready for dimensionality reduction, encoding, and predictive modeling in the next phase of the analysis.
+
 
 # 3. Exploratory Data Analysis (EDA)
 
