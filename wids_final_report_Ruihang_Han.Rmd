@@ -27,6 +27,10 @@ We employ multiple machine learning approaches, including Ridge regression and X
 Our goal is twofold: (1) to achieve robust brain-age prediction and (2) to uncover interpretable sex differences in functional brain development, contributing to a better understanding of normative and atypical trajectories during youth.
 
 
+# 2. Data and Preprocessing
+
+The training dataset comprises 1,104 adolescent participants aged 5 to 21 years, each associated with two key data sources: (1) a functional connectome matrix derived from resting-state fMRI scans, and (2) rich metadata including demographic, physiological, and mental health factors. Each connectome is a 200×200 symmetric matrix representing pairwise correlation between 200 brain regions. To reduce dimensionality and ensure modeling compatibility, only the upper triangular portion of the matrix was extracted and flattened into a feature vector of approximately 19,900 elements per participant.
+
 ## 2.1 Parallel Extraction of Brain Connectivity Features
 
 To efficiently process the large number of `.tsv` files in the `train_tsv` directory, we implemented a parallelized pipeline using the `furrr` and `future` packages. Each file corresponds to one subject and contains their 200×200 functional connectivity matrix.
