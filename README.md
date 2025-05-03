@@ -75,41 +75,13 @@ Total samples: **1,104 participants**, aged **5–21 years**.
 
 ---
 
-## 🚀 Getting Started
 
-### Requirements
-
-Make sure the following R packages are installed:
-
-```r
-tidyverse, caret, glmnet, xgboost, SHAPforxgboost, ComplexHeatmap, pdp, Metrics, ggraph, igraph
-```
-
-You can install dependencies using:
-
-```r
-install.packages(c("tidyverse", "caret", "glmnet", "xgboost", "ComplexHeatmap", "pdp", "Metrics", "ggraph", "igraph"))
-devtools::install_github("liuyanguu/SHAPforxgboost")
-```
-
-### Reproduce the Analysis
-
-1. Clone the repo:
-   ```
-   git clone https://github.com/your-username/wids2025-brain-age.git
-   cd wids2025-brain-age
-   ```
-
-2. Open `report/wids_report.Rmd` in RStudio.
-
-3. Knit the report to generate the full HTML output.
-
----
 
 ## 🧑‍💻 Team
 
-- **Your Name** – Statistical modeling, connectome analysis  
-- **Collaborator Name** – EDA, metadata processing  
+- **Ruihang (Jason) Han** – Lead developer; responsible for modeling, connectome analysis, sex differences evaluation, and final report writing  
+- **[Chenran Zhang]** – Exploratory data analysis (EDA) ,visualization, and metadata summary
+
 
 Affiliation: *Boston University – MSSP Program*
 
