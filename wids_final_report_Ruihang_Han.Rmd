@@ -1,6 +1,6 @@
 ---
 title: "WiDS Datathon++ 2025: Predicting Brain Age and Exploring Sex Differences"
-author: "Ruihang Han"
+author: "Your Team Name"
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -13,6 +13,14 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+library(ggmosaic)
+library(corrplot)
+
+# Load Dataset
+train_df <- read.csv("train_df.csv")
 set.seed(42)
 ```
 
@@ -20,12 +28,11 @@ set.seed(42)
 
 Understanding how brain networks develop differently between males and females during childhood and adolescence is critical to identifying sex-specific vulnerabilities to neuropsychiatric disorders. The WiDS Datathon++ 2025 challenges participants to model brain age using resting-state functional connectivity data and to explore sex-based differences in model behavior and neurodevelopmental patterns.
 
-In this study, we aim to predict chronological age from high-dimensional fMRI-derived connectome features and associated metadata in a population of children and adolescents aged 5 to 21. Each subject’s brain is represented as a 200×200 functional connectivity matrix, vectorized into ~20,000 features, and enriched with demographic, behavioral, and psychological information (e.g., sex, BMI, factor scores).
+In this study, we aim to predict chronological age from high-dimensional fMRI-derived connectome features and associated metadata in a population of children and adolescents aged 5 to 21. Each subject’s brain is represented as a 200×200 functional connectivity matrix, vectorized into \~20,000 features, and enriched with demographic, behavioral, and psychological information (e.g., sex, BMI, factor scores).
 
 We employ multiple machine learning approaches, including Ridge regression and XGBoost, to build accurate age prediction models. To reduce dimensionality and improve interpretability, we apply Principal Component Analysis (PCA) and Lasso-based variable selection. We then conduct a detailed analysis of sex-specific differences in model performance, feature contributions, and brain network patterns, using tools such as residual diagnostics, SHAP values, partial dependence plots, and connectome-based network analysis.
 
 Our goal is twofold: (1) to achieve robust brain-age prediction and (2) to uncover interpretable sex differences in functional brain development, contributing to a better understanding of normative and atypical trajectories during youth.
-
 
 # 2. Data and Preprocessing
 
@@ -105,7 +112,6 @@ This pipeline effectively combined:
 
 The resulting dataset was ready for dimensionality reduction, encoding, and predictive modeling in the next phase of the analysis.
 
-
 # 3. Exploratory Data Analysis (EDA)
 
 ## 3.1 Demographic Variable Distributions
@@ -134,7 +140,7 @@ ggplot(train_df, aes(x = study_site)) + geom_bar(fill = "#e78ac3") + labs(title 
 ggplot(train_df, aes(x = parent_1_education)) + geom_bar(fill = "darkgreen") + labs(title = "Parent 1 Education", x = "Education Level") + theme(axis.text.x = element_text(angle = 45)) + theme_minimal()
 ```
 
-The dataset reveals a moderate gender imbalance (688 males vs. 416 females), and a predominantly right-handed population. White is the most common race, followed by Other, Black, and Asian groups. Most participants were recruited from HBNsiteRU and HBNsiteCBIC, while parental education levels skew toward tertiary completion.
+The dataset reveals a moderate gender imbalance (688 males vs. 416 females), and a predominantly right-handed population. White is the most common race, followed by Other, Black, and Asian groups. Most participants were recruited from HBNsiteRU and HBNsiteCBIC, while parental education levels skew toward tertiary completion. The dataset shows a gender imbalance, with more male participants (688) than female (416). In terms of race, the majority identify as White (530), followed by Other (210), Black (157), and Asian (39), with some missing values. The handedness distribution is heavily skewed toward right-handed individuals (954), with fewer left-handed (121) and ambidextrous (29) participants. Most data were collected from two major study sites, HBNsiteRU and HBNsiteCBIC, while HBNsiteCUNY contributed the fewest. Regarding parental education, a large portion of Parent 1 had completed tertiary education (562), and similarly high levels were observed for Parent 2. Ethnicity data indicates most participants are not Hispanic or Latino (712), while 283 are identified as Hispanic or Latino.
 
 We examined potential interactions between sex and race using a mosaic plot:
 
@@ -160,9 +166,11 @@ numeric_summary
 
 Participants range in age from approximately 5 to 22 years (mean ≈ 11.2), with BMI spanning from 12.6 to 46.1. Mental health scores are z-scored and exhibit moderate variability. The distributions provide a foundation for modeling age while accounting for psychological and developmental diversity.
 
+All psychological factor scores are z-scored, with mean values close to 0, as expected. The p-factor, a general psychopathology indicator, shows a range from -1.61 to 2.98. Internalizing and externalizing scores (e.g., anxiety/depression vs. behavioral dysregulation) also vary broadly, from -2.26 to 2.82 and -2.15 to 4.24, respectively. The attention factor spans from -3.18 to 2.48, with slightly more negative skew. These distributions reflect moderate psychological variability across participants and support the use of these variables as covariates or predictors in modeling brain age. The presence of 18 missing BMI values will need to be addressed via imputation or exclusion strategies in downstream analysis.
+
 ## 3.3 Age and BMI Trends
 
-To further explore distributional trends and group differences, we visualized age, BMI, and their interactions across demographic groups.
+To explore growth and health patterns, we examined age and BMI trends across sex and race groups using histograms, scatterplots, and boxplots.
 
 ```{r}
 # Age by sex
@@ -185,11 +193,15 @@ ggplot(train_df, aes(x = race, y = bmi, fill = race)) +
   theme(axis.text.x = element_text(angle = 45))
 ```
 
-Age shows a right-skewed distribution, concentrated in early adolescence. BMI increases slightly with age, and distributions vary across races, with Asian participants showing the lowest median BMI and Black participants displaying wider dispersion.
+The age distribution is slightly right-skewed, with most participants concentrated between ages 8 and 13. Males outnumber females at nearly every age, consistent with the overall sex imbalance observed earlier.
+
+The BMI scatterplot reveals a general upward trend with age, reflecting natural growth and weight gain. Both sexes show a similar trajectory, though male participants are slightly more represented in the higher BMI range at older ages.
+
+The boxplot of BMI by race shows meaningful variation across groups. Asian participants tend to have the lowest median BMI and narrower spread, whereas Black participants display higher median BMI and greater variability, including more high-end outliers. These patterns may reflect differences in body composition, socioeconomic factors, or access to healthcare and nutrition.
 
 ## 3.4 Psychological Factors and Group Differences
 
-We examined the structure and sex-based distribution of psychological scores, including the general psychopathology factor (`p_factor_fs`) and three specific domains: internalizing, externalizing, and attention.
+We examined the structure and sex-based distribution of psychological scores, including the general psychopathology factor (`p_factor_fs`) and three specific domains: internalizing, externalizing, and attention. These scores are standardized (z-scored) and reflect latent dimensions derived from psychological assessments.
 
 ```{r}
 # Correlation matrix of mental health scores
@@ -199,7 +211,11 @@ train_df %>%
 
 ```
 
-The correlation matrix reveals that p-factor is moderately correlated with internalizing (r ≈ 0.20) and externalizing (r ≈ 0.27), while attention shows weak or inverse correlations, indicating relative independence from mood and behavior symptoms.
+**Moderate positive correlation** between `p_factor_fs` and both `internalizing_fs` (r ≈ 0.20) and `externalizing_fs` (r ≈ 0.27), indicating that higher general psychopathology is associated with greater emotional and behavioral problems.
+
+**Negative correlations** between `attention_fs` and the other factors, especially with `externalizing_fs` (r ≈ –0.24), suggest that attentional difficulties may constitute a separate dimension of mental health burden, distinct from mood- and behavior-related symptoms.
+
+The density plots along the diagonal show that all variables are approximately normally distributed with mild deviations.
 
 ```{r}
 # Mean psychological scores by sex
@@ -213,7 +229,13 @@ train_df %>%
   theme_minimal()
 ```
 
-Females report higher internalizing and p-factor scores, while males display more externalizing and attention-related symptoms. These patterns align with developmental trends observed in clinical literature.
+The bar chart displays the average scores of four standardized psychological factors by sex: general psychopathology (`p_factor_fs`), internalizing symptoms (e.g., anxiety and depression), externalizing behaviors (e.g., aggression and rule-breaking), and attention-related difficulties (e.g., inattention and hyperactivity). Clear differences emerge across sexes:
+
+-   **Females** exhibit higher mean values in both the `p_factor_fs` and `internalizing_fs` domains, suggesting a greater burden of generalized emotional symptoms and internal distress.
+
+-   **Males** score higher in `externalizing_fs` and, most notably, in `attention_fs`, indicating that behavioral dysregulation and attentional difficulties are more prevalent among male participants.
+
+The negative mean `attention_fs` score among females contrasts sharply with the positive score among males, which is consistent with developmental psychology literature. Studies have shown that males are more likely to exhibit overt behavioral symptoms such as hyperactivity and impulsivity, while females tend to present with more internalized symptoms. These sex-linked patterns provide strong justification for stratifying modeling outcomes by sex in subsequent analyses and underscore the potential for differential neurodevelopmental trajectories between males and females.
 
 ```{r}
 # Attention score by sex
@@ -222,7 +244,7 @@ ggplot(train_df, aes(x = sex, y = attention_fs, fill = sex)) +
   labs(title = "Attention Score by Sex", x = "Sex", y = "Attention Factor Score") +
   theme_minimal()
 
-# Optional: Age vs p-factor
+# Age vs P-factor
 ggplot(train_df, aes(x = age, y = p_factor_fs)) +
   geom_point(alpha = 0.5) +
   geom_smooth(method = "lm", se = TRUE, color = "blue") +
@@ -230,7 +252,9 @@ ggplot(train_df, aes(x = age, y = p_factor_fs)) +
   theme_minimal()
 ```
 
-There is no substantial age-based trend in p-factor scores, suggesting general psychological distress levels remain relatively stable throughout the sampled age range.
+The boxplot shows that males have higher attention factor scores than females, both in terms of median and overall range. Male participants display more variability and a greater number of high outliers, indicating more pronounced attention-related difficulties. In contrast, female scores are generally lower and more tightly distributed, suggesting fewer symptoms of inattention or hyperactivity.
+
+The scatterplot of age and p-factor scores shows little to no relationship between the two. The trend line is flat, indicating that general psychological distress levels remain stable across the sampled age range.
 
 ## 3.5 Correlation Matrix of Continuous Predictors
 
@@ -245,11 +269,11 @@ corrplot(cor_matrix, method = "color", type = "lower", addCoef.col = "black", nu
          title = "Correlation Matrix of Selected Variables", mar = c(0, 0, 1, 0))
 ```
 
-BMI and age exhibit a moderate positive correlation (r = 0.51). The mental health variables show relatively weak correlations, suggesting independent symptom dimensions and supporting their separate inclusion in modeling frameworks.
+Age and BMI show a moderate positive correlation (r = 0.51), which is consistent with expected growth patterns. The psychological scores—p-factor, internalizing, externalizing, and attention—are only weakly correlated with each other and with age or BMI. This indicates that they represent distinct constructs and can be modeled independently without strong concern for multicollinearity.
 
 ## 3.6 PCA of Brain Connectivity Features
 
-We applied PCA to the high-dimensional connectome feature space to visualize dominant sources of variability.
+To explore the structure of high-dimensional functional connectivity features, we applied Principal Component Analysis (PCA) to the set of connectome variables. PCA provides a reduced-dimensional representation that captures the most salient variance in the data, making it useful for visualizing broad patterns such as potential grouping by sex.
 
 ```{r}
 brain_data <- train_df %>% select(starts_with("V"))
@@ -268,8 +292,7 @@ ggplot(pca_df, aes(x = PC1, y = PC2, color = sex)) +
   theme_minimal()
 ```
 
-The PCA projection reveals no major clustering or separation by sex, indicating that sex does not explain a large portion of variance in the first two components. Brain connectivity variation appears to be more individually driven or spread across higher-order dimensions.
-
+The PCA projection onto the first two components reveals substantial overlap between sexes, with no clear clustering or boundary that separates male and female participants. This suggests that sex does not account for large-scale variance in the dominant principal components. Instead, brain connectivity patterns appear to be more individually distributed or may vary along more subtle dimensions not captured in PC1 and PC2. This visual result supports the need for more nuanced modeling approaches when analyzing sex-related brain connectivity differences.
 
 # 4. Modeling and Prediction
 
@@ -984,6 +1007,7 @@ for (i in 1:5) {
 }
 
 ```
+
 We examined the distribution of the top five principal components by sex to assess potential structural differences in connectome space. PC1 and PC2 show noticeable shifts between male and female distributions, with males generally exhibiting lower values on PC1. Smaller but consistent differences are also observed in PC3 to PC5, suggesting sex-related variation in the underlying connectivity features.
 
 ### 5.2.2 Statistical Tests on Principal Components
@@ -1001,7 +1025,8 @@ pc_tests <- map_df(1:5, function(i) {
 print(pc_tests)
 
 ```
-To formally test for sex-based differences in the connectome-derived feature space, we conducted two-sample t-tests on the top five principal components. The results reveal a statistically significant difference in PC1 (p = 0.0106), indicating that this component captures meaningful variation associated with sex. No significant differences were found in PC2 through PC5 (all p > 0.23), suggesting that the sex effect is primarily concentrated in the leading principal axis.
+
+To formally test for sex-based differences in the connectome-derived feature space, we conducted two-sample t-tests on the top five principal components. The results reveal a statistically significant difference in PC1 (p = 0.0106), indicating that this component captures meaningful variation associated with sex. No significant differences were found in PC2 through PC5 (all p \> 0.23), suggesting that the sex effect is primarily concentrated in the leading principal axis.
 
 ## 5.3 Feature Importance Comparison (PDP & SHAP)
 
@@ -1035,6 +1060,7 @@ bind_rows(
   labs(title = "PDP of BMI by Sex (Ridge Regression)", x = "BMI", y = "Predicted Age") +
   theme_minimal()
 ```
+
 The PDP illustrates the marginal effect of BMI on predicted age across sex-specific Ridge regression models. While both curves exhibit an overall positive relationship, the predicted age for females is consistently higher than that for males at corresponding BMI levels. This suggests that BMI may have a more pronounced association with predicted age in females under the Ridge modeling framework.
 
 ### 5.3.2 SHAP Summary for XGBoost by Sex
@@ -1084,6 +1110,7 @@ ggplot(shap_long, aes(x = reorder(Feature, SHAP), y = SHAP, fill = Sex)) +
   theme_minimal()
 
 ```
+
 The SHAP summary plot reveals the top predictors of age for each sex under the XGBoost model. BMI consistently emerged as the most influential feature for both males and females, followed by principal components such as PC1 and PC19. While there is general overlap in the top features across sexes, certain components (e.g., PC19, PC11) show sex-specific prominence, suggesting subtle differences in how feature importance contributes to model predictions.
 
 ## 5.4 Connectome Differences and Network Visualization
@@ -1115,6 +1142,7 @@ diff_mat <- diff_mat + t(diff_mat) - diag(diag(diff_mat))
 Heatmap(diff_mat, name = "Male–Female\nConnectivity")
 
 ```
+
 The heatmap illustrates the difference in mean connectome connectivity between males and females across all brain region pairs. Warm colors (red) indicate higher average connectivity in males, while cool colors (blue) indicate stronger connectivity in females. The symmetric pattern and hierarchical clustering reveal broad but heterogeneous sex-specific differences in functional brain organization.
 
 ### 5.4.2 Subnetwork of Top Differences
@@ -1152,6 +1180,7 @@ g_sub %>%
   labs(title = "Subnet: Top 50 Male–Female Connectivity Differences")
 
 ```
+
 We constructed a subnetwork comprising the 50 brain connections with the largest absolute differences in mean connectivity between male and female participants. The resulting graph reveals that connectivity differences are not randomly scattered but instead concentrated around a few hub-like nodes, such as Node 192, 61, and 69. These nodes exhibit disproportionately higher connectivity divergence and may play a central role in sex-specific brain development. Moreover, the asymmetrical and dense structure of this subgraph suggests localized rather than global sex differences in connectome organization. These findings highlight potential regions of interest for future neurobiological investigations into sex-related functional specialization.
 
 ### 5.4.3 Barplot of Top 10 Connectivity Differences
@@ -1172,6 +1201,7 @@ edges_df %>%
   theme_minimal()
 
 ```
+
 The bar chart summarizes the top 10 brain region pairs exhibiting the largest absolute differences in mean connectivity between male and female participants. Notably, the connection between regions 77 and 81 shows the most pronounced sex difference, with an absolute divergence exceeding 0.15. Several other region pairs involving node 61 (e.g., 61–76, 61–78, 61–69) also appear prominently, reinforcing its potential role as a sex-sensitive hub. These findings complement the subnetwork visualization and suggest that specific neural circuits, rather than diffuse patterns, account for most of the observed sex-based connectivity disparities. Such localized differences may be critical for understanding functional specialization in brain development across sexes.
 
 ## 5.5 Summary of Sex Differences Findings
@@ -1196,8 +1226,6 @@ At the network level, connectome analysis showed that sex-related differences we
 
 Taken together, these findings underscore subtle yet consistent sex-based heterogeneity in both prediction performance and neurobiological structure, with potential implications for personalized approaches in neurodevelopmental research and clinical modeling.
 
-
-
 # 7. Conclusion and Future Work
 
 This study explored the prediction of chronological brain age using resting-state functional connectivity data and metadata in a large youth sample. By combining PCA-reduced connectome features with curated metadata, we evaluated multiple modeling approaches—including Ridge regression, XGBoost, and their ensemble variants. Among these, the stacking ensemble achieved the best generalization performance (validation RMSE = 1.7359), outperforming individual models and highlighting the value of combining linear and non-linear learners.
@@ -1209,6 +1237,7 @@ Taken together, these findings demonstrate that high-dimensional neuroimaging da
 # 8. Appendix
 
 To ensure reproducibility and provide transparency on the computational environment, we include the full R session information below:
+
 ```{r}
 sessionInfo()
 ```
