@@ -1,6 +1,6 @@
 ---
 title: "WiDS Datathon++ 2025: Predicting Brain Age and Exploring Sex Differences"
-author: "Your Team Name"
+author: "Ruihang Han"
 date: "`r Sys.Date()`"
 output:
   html_document:
