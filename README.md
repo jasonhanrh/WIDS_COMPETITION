@@ -80,7 +80,7 @@ Total samples: **1,104 participants**, aged **5–21 years**.
 ## 🧑‍💻 Team
 
 - **Ruihang (Jason) Han** – Lead developer; responsible for modeling, connectome analysis, sex differences evaluation, and final report writing  
-- **[Chenran Zhang]** – Exploratory data analysis (EDA) ,visualization, and metadata summary
+- **Chenran Zhang** – Exploratory data analysis (EDA) ,visualization, and metadata summary
 
 
 Affiliation: *Boston University – MSSP Program*
