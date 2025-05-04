@@ -201,19 +201,7 @@ The boxplot of BMI by race shows meaningful variation across groups. Asian parti
 
 ## 3.4 Psychological Factors and Group Differences
 
-We examined the structure and sex-based distribution of psychological scores, including the general psychopathology factor (`p_factor_fs`) and three specific domains: internalizing, externalizing, and attention. These scores are standardized (z-scored) and reflect latent dimensions derived from psychological assessments.
-
-```{r}
-# Correlation matrix of mental health scores
-train_df %>% 
-  select(p_factor_fs, internalizing_fs, externalizing_fs, attention_fs) %>%
-  ggpairs(title = "Correlation between Mental Health Factors")
-
-```
-
-**Moderate positive correlation** between `p_factor_fs` and both `internalizing_fs` (r ≈ 0.20) and `externalizing_fs` (r ≈ 0.27), indicating that higher general psychopathology is associated with greater emotional and behavioral problems.
-
-**Negative correlations** between `attention_fs` and the other factors, especially with `externalizing_fs` (r ≈ –0.24), suggest that attentional difficulties may constitute a separate dimension of mental health burden, distinct from mood- and behavior-related symptoms.
+om mood- and behavior-related symptoms.
 
 The density plots along the diagonal show that all variables are approximately normally distributed with mild deviations.
 
@@ -303,24 +291,7 @@ set.seed(42)
 
 ## 4.1 Package Loading
 
-We begin by loading the necessary R packages for data manipulation, modeling, cross-validation, and optimization.
-
-```{r}
-library(tidyverse)
-library(forcats)
-library(caret)
-library(glmnet)
-library(Metrics)
-library(ggplot2)
-library(xgboost)
-library(broom)
-library(doParallel)
-library(ParBayesianOptimization)
-```
-
-## 4.2 Data Import and Splitting
-
-The dataset was first loaded from a preprocessed `.rds` file. To evaluate model performance, we split the data into training (80%) and validation (20%) sets using stratified sampling based on the `sex` variable to preserve group proportions in both subsets.
+m a preprocessed `.rds` file. To evaluate model performance, we split the data into training (80%) and validation (20%) sets using stratified sampling based on the `sex` variable to preserve group proportions in both subsets.
 
 ```{r}
 df <- readRDS("train_df.rds")
@@ -329,17 +300,6 @@ train <- df[train_idx, ]
 valid <- df[-train_idx, ]
 ```
 
-## 4.3 PCA for Dimensionality Reduction (90% Variance)
-
-To reduce dimensionality and mitigate noise in the connectome features, we applied Principal Component Analysis (PCA) to the subset of variables starting with `V`, which represent the functional connectivity structure. Components were standardized before decomposition. We retained the minimum number of principal components required to explain at least 90% of the total variance, balancing representational fidelity and computational efficiency. The same transformation was applied to both training and validation sets using the loadings obtained from the training data.
-
-```{r}
-# Perform PCA on connectome features
-pcs <- prcomp(select(train, starts_with("V")), center = TRUE, scale. = TRUE)
-
-# Extract proportion of variance explained by each principal component
-explained_var <- summary(pcs)$importance[2, ]
-cum_explained <- cumsum(explained_var)
 
 # Determine number of components to retain 90% cumulative variance
 n_pcs_90 <- which(cum_explained >= 0.90)[1]
@@ -353,19 +313,7 @@ valid_pc <- predict(pcs, select(valid, starts_with("V")) %>%
 
 ```
 
-The PCA procedure indicated that 559 components were required to retain 90% of the total variance in the connectome features. This relatively large number reflects the high dimensionality and complexity of the original connectivity matrix. While PCA helped reduce noise and multicollinearity, the slow decay in variance suggests that information is broadly distributed across many dimensions, limiting the potential for aggressive dimensionality reduction.
 
-## 4.4 Metadata Processing and Encoding
-
-We extracted and preprocessed relevant metadata variables including demographic factors (e.g., sex, race, handedness), cognitive assessments (e.g., p-factor, internalizing, externalizing, attention), and study site information. Missing values in continuous variables such as BMI were imputed using the median. For categorical variables, missing levels were explicitly retained as a separate category labeled "Missing" to preserve potentially informative patterns. All categorical variables were then converted to dummy (one-hot) encoded format to ensure compatibility with downstream machine learning models.
-
-```{r}
-prepare_meta <- function(df) {
-  df %>%
-    select(participant_id, sex, bmi, p_factor_fs, internalizing_fs, externalizing_fs, attention_fs,
-           race, study_site, handedness, parent_1_education) %>%
-    mutate(
-      bmi = ifelse(is.na(bmi), median(bmi, na.rm = TRUE), bmi),
       across(c(sex, race, study_site, handedness, parent_1_education), ~ fct_na_value_to_level(factor(.), "Missing"))
     )
 }
@@ -380,22 +328,6 @@ valid_meta_enc <- bind_cols(as_tibble(encode(valid_meta %>% select(-participant_
 
 ## 4.5 Merging PCA Features and Metadata
 
-To prepare the final modeling datasets, we combined the PCA-transformed connectome features with the encoded metadata using `participant_id` as the join key. This ensured that each observation retained both its neuroimaging and contextual information. We then defined the predictors (`X_train`, `X_valid`) and the response variable (`y_train`, `y_valid`) by aligning with participants present in the merged datasets, removing identifier fields to ensure compatibility with downstream algorithms.
-
-```{r}
-train_pc_df <- train_pc %>% mutate(participant_id = train$participant_id)
-valid_pc_df <- valid_pc %>% mutate(participant_id = valid$participant_id)
-
-train_merged <- inner_join(train_pc_df, train_meta_enc, by = "participant_id")
-valid_merged <- inner_join(valid_pc_df, valid_meta_enc, by = "participant_id")
-
-X_train <- train_merged %>% select(-participant_id)
-y_train <- train %>% filter(participant_id %in% train_merged$participant_id) %>% pull(age)
-X_valid <- valid_merged %>% select(-participant_id)
-y_valid <- valid %>% filter(participant_id %in% valid_merged$participant_id) %>% pull(age)
-```
-
-## 4.6 Lasso Feature Selection (Metadata Only)
 
 To identify the most informative predictors among the metadata variables, we applied Lasso regression with 10-fold cross-validation. Lasso imposes an L1 penalty, shrinking less important coefficients toward zero and effectively performing variable selection. This approach helps reduce overfitting and improves model interpretability by eliminating redundant or weakly associated features. The selected variables were retained for use in subsequent modeling steps involving metadata-PCA integration.
 
@@ -406,20 +338,6 @@ X_meta_mat <- as.matrix(X_train_meta)
 
 # Perform Lasso regression with 10-fold cross-validation
 cv_lasso <- cv.glmnet(
-  X_meta_mat, y_train,
-  alpha = 1,                          # Lasso penalty
-  nfolds = 10,                        # 10-fold CV
-  standardize = TRUE,                # Standardize predictors
-  type.measure = "mse"               # Use MSE to evaluate
-)
-
-# Extract coefficients at optimal lambda
-lasso_coefs <- coef(cv_lasso, s = "lambda.min")
-
-# Select non-zero coefficient features (excluding intercept)
-lasso_selected <- rownames(lasso_coefs)[
-  lasso_coefs[, 1] != 0 & rownames(lasso_coefs) != "(Intercept)"
-]
 
 # Display selected metadata features
 cat("Selected metadata features:\n")
@@ -431,22 +349,7 @@ Lasso regression identified six metadata variables with non-zero coefficients at
 
 ## 4.7 Ridge Regression
 
-### 4.7.1 Full PCA + Metadata
-
-We fitted a Ridge regression model to the combined feature set, which included both the PCA-transformed connectome features and the full set of encoded metadata variables. Ridge regression was chosen for its ability to handle multicollinearity and retain all input variables by applying L2 regularization. To ensure consistent fold assignments across experiments, we used fixed fold IDs for 10-fold cross-validation. Model performance was evaluated using RMSE on the validation set.
-
-```{r}
-# Convert training and validation predictors to matrix format
-X_train_mat <- as.matrix(X_train)
-X_valid_mat <- as.matrix(X_valid)
-
-# Manually define fold IDs for reproducibility in cross-validation
-set.seed(42)
-foldid <- sample(rep(1:10, length.out = length(y_train)))  # 10-fold CV assignment
-
-# Fit Ridge regression model using cross-validation with fixed folds
-cv_ridge <- cv.glmnet(
-  X_train_mat, y_train,
+###
   alpha = 0,                     # alpha = 0 for Ridge
   nfolds = 10,                   # number of folds
   foldid = foldid,               # use predefined fold IDs
@@ -464,17 +367,7 @@ cat("Ridge regression validation RMSE:", round(ridge_rmse, 4), "\n")
 # Visualize predicted vs actual values
 ridge_plot <- ggplot(data.frame(Predicted = ridge_pred, Actual = y_valid), aes(x = Actual, y = Predicted)) +
   geom_point(alpha = 0.5) +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "blue") +
-  labs(title = "Ridge Regression: Predicted vs Actual Age") +
-  theme_minimal()
-print(ridge_plot)
-
-
-```
-
-The Ridge regression model achieved a validation RMSE of **6.80**, indicating moderate predictive accuracy. As shown in the scatter plot, the predicted ages are positively correlated with the actual ages, but there is a noticeable tendency to underestimate older participants and overestimate younger ones. This pattern suggests that the model captures general trends but may be limited in modeling extreme values. The fitted regression line (in blue) deviates from the ideal diagonal, indicating room for improvement in calibration.
-
-This bias may reflect limitations in the linear model's ability to capture complex, nonlinear relationships in the feature space.
+  g relationships in the feature space.
 
 ### 4.7.2 PCA + Lasso-Selected Metadata
 
@@ -482,23 +375,7 @@ To improve model parsimony and potentially enhance generalization, we re-estimat
 
 ```{r}
 # Select metadata features identified by Lasso
-X_train_lasso_meta <- X_train_meta[, lasso_selected]
-X_valid_lasso_meta <- X_valid %>% select(all_of(colnames(X_train_lasso_meta)))
 
-# Combine selected metadata with top principal components
-X_train_lasso_pca <- cbind(train_pc, X_train_lasso_meta)
-X_valid_lasso_pca <- cbind(valid_pc, X_valid_lasso_meta)
-
-# Convert combined features to matrix format
-X_train_lasso_pca_mat <- as.matrix(X_train_lasso_pca)
-X_valid_lasso_pca_mat <- as.matrix(X_valid_lasso_pca)
-
-# Fit Ridge regression using cross-validation
-cv_ridge_lasso_pca <- cv.glmnet(
-  X_train_lasso_pca_mat, y_train,
-  alpha = 0,                          # alpha = 0 for Ridge
-  nfolds = 10,                        # 10-fold CV
-  standardize = TRUE,
   type.measure = "mse"
 )
 
@@ -510,24 +387,6 @@ ridge_lasso_pca_rmse <- rmse(y_valid, ridge_lasso_pca_pred)
 cat("Ridge (Lasso Metadata + PCA) validation RMSE:", round(ridge_lasso_pca_rmse, 4), "\n")
 
 ```
-
-The Ridge model using only Lasso-selected metadata in combination with PCA-transformed features achieved a validation RMSE of **6.81**, which is nearly identical to the full-feature Ridge model. This suggests that the excluded metadata variables had minimal predictive value, and the reduced model retained most of the relevant signal. From a modeling perspective, this more parsimonious specification is preferable, as it simplifies interpretation and may generalize better to unseen data.
-
-### 4.7.3 Ridge with 5-Fold Averaging
-
-To further stabilize the Ridge model predictions and reduce variance, we implemented a 5-fold ensemble strategy. In each iteration, the model was trained on 80% of the training data and evaluated on the full validation set. Final predictions were obtained by averaging results across all five models. This ensemble approach helps mitigate sensitivity to data splits and improves generalization.
-
-```{r}
-# Load necessary libraries
-library(glmnet)
-library(caret)
-library(Metrics)
-
-# Set seed for reproducibility
-set.seed(42)
-
-# Create 5-fold cross-validation splits
-folds <- createFolds(y_train, k = 5)
 
 # Initialize list to store predictions for each fold
 ridge_preds <- list()
@@ -550,28 +409,6 @@ for (i in seq_along(folds)) {
   ridge_preds[[i]] <- ridge_pred
 }
 
-# Combine predictions from all folds and compute mean prediction
-ridge_matrix <- do.call(cbind, ridge_preds)
-ridge_lasso_pca_pred <- rowMeans(ridge_matrix)
-
-# Compute standard deviation across folds (for potential residual uncertainty analysis)
-ridge_lasso_pca_sd <- apply(ridge_matrix, 1, sd)
-
-# Compute RMSE on validation set
-ridge_lasso_pca_rmse <- rmse(y_valid, ridge_lasso_pca_pred)
-cat("Ridge (5-Fold Averaging) validation RMSE:", round(ridge_lasso_pca_rmse, 4), "\n")
-
-# Visualize predicted vs actual age
-ggplot(data.frame(Predicted = ridge_lasso_pca_pred, Actual = y_valid), aes(x = Actual, y = Predicted)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "blue") +
-  labs(title = "Ridge (5-Fold Ensemble): Predicted vs Actual Age") +
-  theme_minimal()
-
-
-```
-
-The 5-fold averaged Ridge model achieved a validation RMSE of **5.94**, demonstrating a substantial improvement over both the full Ridge model (RMSE = 6.80) and the reduced Ridge model using Lasso-selected features (RMSE = 6.81). By averaging predictions across multiple fold-specific models, this ensemble approach helped reduce variance and stabilize predictions.
 
 The predicted-versus-actual scatter plot shows improved alignment with the ideal diagonal line, particularly for mid-range age values. The slope of the fitted trend line is steeper than in previous Ridge models, indicating better calibration across the range of predicted ages. These results highlight the benefit of fold-wise ensembling for increasing robustness and generalization in linear models.
 
@@ -618,129 +455,7 @@ bayes_xgb_function <- function(eta, max_depth) {
   list(Score = -rmse(y_valid, predict(model, dvalid)))
 }
 
-# Perform Bayesian optimization to find best eta and max_depth
-opt <- bayesOpt(
-  FUN = bayes_xgb_function,
-  bounds = list(
-    eta = c(0.03, 0.1),
-    max_depth = c(3L, 6L)
-  ),
-  initPoints = 5,
-  iters.n = 10,
-  acq = "ucb",
-  verbose = 1
-)
 
-# Extract best hyperparameters
-best_params <- getBestPars(opt)
-
-# Train final XGBoost model using optimal parameters
-xgb_final <- xgb.train(
-  params = list(
-    booster = "gbtree",
-    objective = "reg:squarederror",
-    eval_metric = "rmse",
-    eta = best_params$eta,
-    max_depth = as.integer(best_params$max_depth),
-    subsample = 0.8,
-    colsample_bytree = 0.8,
-    tree_method = "hist"
-  ),
-  data = dtrain,
-  nrounds = 200,
-  watchlist = list(valid = dvalid),
-  early_stopping_rounds = 10,
-  verbose = 1
-)
-
-# Predict on validation set
-xgb_pred <- predict(xgb_final, newdata = dvalid)
-
-# Evaluate model performance using RMSE
-xgb_rmse <- rmse(y_valid, xgb_pred)
-cat("Final tuned XGBoost validation RMSE:", round(xgb_rmse, 4), "\n")
-
-# Plot predicted vs actual values
-xgb_plot <- ggplot(data.frame(Predicted = xgb_pred, Actual = y_valid), aes(x = Actual, y = Predicted)) +
-  geom_point(alpha = 0.5, color = "#1f77b4") +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "darkgray") +
-  labs(title = "Tuned XGBoost (Bayesian Optimization)", x = "Actual Age", y = "Predicted Age") +
-  theme_minimal()
-
-print(xgb_plot)
-
-```
-
-The XGBoost model was tuned via Bayesian Optimization over 10 iterations, targeting optimal values for `eta` and `max_depth`. The training process successfully converged after 159 boosting rounds, yielding a minimum validation RMSE of **2.6868**, the lowest among all individual models evaluated.
-
-The scatter plot of predicted versus actual age shows a tighter concentration of points along the diagonal reference line compared to Ridge regression models, suggesting improved prediction accuracy and calibration. However, the model still slightly underestimates age for older participants, as indicated by systematic deviations from the diagonal in the upper-right quadrant.
-
-Overall, XGBoost outperformed linear models in terms of RMSE, likely due to its ability to capture complex nonlinear interactions among metadata and PCA features. These findings support the inclusion of gradient-boosted trees as a strong standalone predictor or a base learner in ensemble frameworks.
-
-## 4.9 Model Ensembling: Ridge + XGBoost
-
-To leverage the complementary strengths of linear and nonlinear models, we constructed a simple ensemble that linearly combines predictions from the Ridge and XGBoost models. Ridge captures additive linear effects efficiently, while XGBoost is capable of modeling complex, nonlinear interactions. We evaluated a series of ensemble weights, ranging from 0 to 0.95 for the Ridge component, and selected the weight that minimized RMSE on the validation set.
-
-```{r}
-# Define a sequence of weights for Ridge predictions (from 0 to 0.95)
-weights <- seq(0, 0.95, by = 0.05)
-
-# Compute RMSE for each ensemble weight (Ridge weight w, XGBoost weight 1 - w)
-ensemble_rmse <- sapply(weights, function(w) {
-  rmse(y_valid, w * ridge_lasso_pca_pred + (1 - w) * xgb_pred)
-})
-
-# Identify the best weight that minimizes RMSE
-best_w <- weights[which.min(ensemble_rmse)]
-cat("Optimal ensemble weight (Ridge):", best_w, 
-    " | Corresponding RMSE:", round(min(ensemble_rmse), 4), "\n")
-
-# Plot validation RMSE vs ensemble weight
-ensemble_plot <- ggplot(data.frame(Weight = weights, RMSE = ensemble_rmse), aes(x = Weight, y = RMSE)) +
-  geom_line() +
-  geom_point() +
-  geom_vline(xintercept = best_w, linetype = "dashed", color = "red") +
-  labs(title = "Ensemble Weight vs Validation RMSE", 
-       x = "Ridge Weight", y = "Validation RMSE") +
-  theme_minimal()
-
-print(ensemble_plot)
-
-```
-
-To further improve predictive performance, we constructed a simple weighted ensemble by linearly combining predictions from the Ridge and XGBoost models. Specifically, we evaluated a range of weights $w \in [0, 0.95]$ applied to the Ridge model output, with $1 - w$ assigned to XGBoost.
-
-As shown in Figure X, the ensemble RMSE exhibits a clear U-shaped trend, reaching a minimum of **2.2437** when the Ridge model was assigned a weight of **0.2**. This indicates that the XGBoost model, while more dominant, benefits from a small contribution of Ridge predictions, likely due to their ability to capture linear signals that may not be prioritized by tree-based learners.
-
-This result demonstrates that ensemble averaging can yield performance gains over individual models by leveraging complementary model strengths. The ensemble RMSE of 2.2437 represents the best performance achieved across all modeling strategies evaluated.
-
-## 4.10 Residual Distribution Plots
-
-To assess model calibration and detect potential systematic biases, we examined the distribution of residuals from the Ridge, XGBoost, and ensemble models. Residuals were defined as the difference between actual and predicted values. A well-calibrated model should exhibit residuals approximately centered around zero and symmetrically distributed, with limited skewness or extreme outliers.
-
-```{r}
-# Residual plot for Ridge model
-resid_ridge <- y_valid - ridge_lasso_pca_pred
-
-ggplot(data.frame(Residual = resid_ridge), aes(x = Residual)) +
-  geom_histogram(bins = 30, fill = "steelblue", alpha = 0.7) +
-  theme_minimal() +
-  labs(
-    title = "Ridge Model Residual Distribution",
-    x = "Residual (Actual - Predicted)",
-    y = "Count"
-  )
-
-# Residual plot for XGBoost model
-resid_xgb <- y_valid - xgb_pred
-
-ggplot(data.frame(Residual = resid_xgb), aes(x = Residual)) +
-  geom_histogram(bins = 30, fill = "darkorange", alpha = 0.7) +
-  theme_minimal() +
-  labs(
-    title = "XGBoost Model Residual Distribution",
-    x = "Residual (Actual - Predicted)",
-    y = "Count"
   )
 
 # Residual plot for Ensemble model
@@ -757,186 +472,6 @@ ggplot(data.frame(Residual = resid_ensemble), aes(x = Residual)) +
 
 ```
 
-The residual distributions of the Ridge, XGBoost, and Ensemble models provide insights into the prediction error characteristics of each approach. The Ridge model exhibits a wide and relatively symmetric residual spread, but with heavier tails, indicating higher variance in its predictions. The XGBoost model, while achieving lower RMSE, shows a left-skewed residual distribution, suggesting a tendency to overestimate the target variable (age). Notably, the ensemble model combining Ridge and XGBoost achieves the most compact and symmetric residual distribution, reflecting reduced bias and variance. This improvement demonstrates the effectiveness of model ensembling in enhancing predictive stability and accuracy.
-
-## 4.11 Stacking Ensemble & Residual Diagnostics
-
-To further enhance predictive performance, we implemented a stacking ensemble approach. In this framework, predictions from the Ridge and XGBoost models were used as inputs to a second-level meta-learner, which was trained to optimize the final prediction. We selected XGBoost as the meta-learner due to its flexibility and ability to model nonlinear relationships between base model outputs. This method allows the ensemble to learn optimal weights or interactions beyond simple averaging.
-
-```{r}
-# Load required package
-library(glmnet)
-
-# Step 1: Construct second-level training data using predictions from base models
-stack_train <- data.frame(
-  Ridge = ridge_lasso_pca_pred,
-  XGB = xgb_pred
-)
-
-# Convert stacking inputs into DMatrix format for XGBoost
-dstack <- xgb.DMatrix(as.matrix(stack_train), label = y_valid)
-
-# Step 2: Train meta-learner (XGBoost) on top of base model predictions
-meta_xgb <- xgb.train(
-  params = list(
-    booster = "gbtree",
-    objective = "reg:squarederror",
-    eta = 0.05,
-    max_depth = 2,
-    subsample = 1,
-    colsample_bytree = 1,
-    eval_metric = "rmse"
-  ),
-  data = dstack,
-  nrounds = 100,
-  verbose = 0
-)
-
-# Step 3: Make predictions using the stacking ensemble
-final_pred <- predict(meta_xgb, newdata = dstack)
-
-# Step 4: Evaluate RMSE on the validation set
-stacking_rmse <- rmse(y_valid, final_pred)
-cat("Stacking Ensemble validation RMSE:", round(stacking_rmse, 4), "\n")
-
-# Predicted vs Actual Plot
-ggplot(data.frame(Predicted = final_pred, Actual = y_valid), aes(x = Actual, y = Predicted)) +
-  geom_point(alpha = 0.5, color = "#377eb8") +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
-  labs(
-    title = "Stacking Ensemble: Predicted vs Actual Age",
-    x = "Actual Age",
-    y = "Predicted Age"
-  ) +
-  theme_minimal()
-
-# Residual Histogram
-resid_stacking <- y_valid - final_pred
-
-ggplot(data.frame(Residual = resid_stacking), aes(x = Residual)) +
-  geom_histogram(bins = 30, fill = "#4daf4a", alpha = 0.7) +
-  theme_minimal() +
-  labs(
-    title = "Stacking Ensemble Residual Distribution",
-    x = "Residual (Actual - Predicted)",
-    y = "Count"
-  )
-
-
-```
-
-The stacking ensemble, which combines Ridge and XGBoost predictions through a meta-learner trained on their outputs, achieves a validation RMSE of 1.7359, the lowest among all modeling strategies. This significant performance gain highlights the complementary nature of the base learners: Ridge contributes stability across broader patterns, while XGBoost captures complex nonlinearities. The result affirms that stacking effectively leverages model diversity to enhance generalization and reduce prediction error.
-
-The predicted versus actual plot for the stacking ensemble demonstrates a strong alignment along the 45-degree reference line, indicating high predictive accuracy. Compared to base models, the stacking approach reduces dispersion and compresses extreme deviations, particularly for younger subjects. This suggests that the ensemble effectively integrates complementary strengths from Ridge and XGBoost models, yielding more robust estimates of age.
-
-The residual distribution for the stacking model is centered near zero and exhibits a relatively symmetric bell shape with minimal skewness, reflecting well-calibrated predictions. The distribution is also narrower compared to that of individual models, indicating a reduction in both variance and extreme errors. This improvement in residual behavior further supports the superiority of the ensemble over single-model approaches.
-
-# 5. Sex Differences Analysis
-
-```{r}
-library(tidyverse)
-library(Metrics)
-library(igraph)
-library(ComplexHeatmap)
-library(ggraph)
-library(tidygraph)
-library(glmnet)
-library(xgboost)
-library(SHAPforxgboost)
-library(pdp)
-library(purrr)
-```
-
-## 5.1 Prediction Error by Sex
-
-### 5.1.1 Combine Predictions for Validation Set
-
-To facilitate sex-stratified evaluation of model performance, we first construct a validation dataframe that merges the observed age and sex with the predicted values generated by the Ridge and XGBoost models. This enables direct comparison of prediction accuracy between male and female subgroups.
-
-```{r}
-# Filter validation set to matched participants and attach model predictions
-valid_preds <- valid %>%
-  filter(participant_id %in% valid_merged$participant_id) %>%
-  select(participant_id, sex, age) %>%
-  mutate(
-    Ridge_Pred = ridge_lasso_pca_pred,  # Ridge predicted age
-    XGB_Pred   = xgb_pred               # XGBoost predicted age
-  )
-
-```
-
-### 5.1.2 Compute RMSE by Sex
-
-To quantify the predictive performance of each model across sexes, we compute the Root Mean Squared Error (RMSE) separately for males and females. This allows us to assess whether either model systematically underperforms for a specific sex group, thereby identifying potential disparities in model accuracy.
-
-```{r}
-# Split predictions by sex
-male_preds   <- valid_preds %>% filter(sex == "Male")
-female_preds <- valid_preds %>% filter(sex == "Female")
-
-# Compute RMSE for each model × sex combination
-ridge_rmse_male   <- rmse(male_preds$age, male_preds$Ridge_Pred)
-ridge_rmse_female <- rmse(female_preds$age, female_preds$Ridge_Pred)
-xgb_rmse_male     <- rmse(male_preds$age, male_preds$XGB_Pred)
-xgb_rmse_female   <- rmse(female_preds$age, female_preds$XGB_Pred)
-
-# Summarize in a tibble
-tibble(
-  Model = rep(c("Ridge", "XGBoost"), each = 2),
-  Sex   = rep(c("Male", "Female"), times = 2),
-  RMSE  = c(ridge_rmse_male, ridge_rmse_female, xgb_rmse_male, xgb_rmse_female)
-)
-
-```
-
-The RMSE results indicate that XGBoost outperforms Ridge regression for both male and female participants, reflecting its greater capacity to model non-linear relationships. Notably, Ridge regression yields slightly higher error for males (RMSE = 6.07) than females (RMSE = 5.72), whereas the pattern is reversed for XGBoost, with male RMSE at 2.56 and female RMSE at 2.88. This reversal suggests that prediction performance disparities across sexes are model-dependent, and motivates further exploration of feature-level differences.
-
-### 5.1.3 Predicted vs Actual Age by Sex
-
-To visualize prediction accuracy and potential bias, we generate scatter plots of predicted versus actual age for both Ridge and XGBoost models, stratified by sex. The 45-degree reference line facilitates assessment of systematic over- or under-prediction patterns across the male and female subgroups.
-
-```{r}
-# Scatter plot: Ridge predictions vs actual age, colored by sex
-ggplot(valid_preds, aes(x = age, y = Ridge_Pred, color = sex)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
-  labs(title = "Ridge: Predicted vs Actual Age by Sex", color = "Sex") +
-  theme_minimal()
-
-# Scatter plot: XGBoost predictions vs actual age, colored by sex
-ggplot(valid_preds, aes(x = age, y = XGB_Pred, color = sex)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
-  labs(title = "XGBoost: Predicted vs Actual Age by Sex", color = "Sex") +
-  theme_minimal()
-
-```
-
-Visual comparisons of predicted versus actual age distributions reveal distinct behavioral patterns across models and sex groups. The Ridge model shows a relatively linear relationship but with substantial vertical dispersion, especially at younger ages. Male predictions tend to deviate more severely from the identity line, suggesting higher variance and underfitting in this subgroup. On the other hand, XGBoost predictions cluster more tightly, though they exhibit a clear central tendency: the model systematically underestimates age in older children while slightly overestimating it in younger ones. This “flattening” effect is indicative of regularization-induced bias and may stem from the limited variability captured by tree-based splits. Furthermore, while female predictions under both models remain closer to the identity line on average, their distribution exhibits moderate compression, reflecting potential sex-based model sensitivity.
-
-### 5.1.4 Residual Density and Significance Tests
-
-To further explore sex-based differences in prediction accuracy, we compute residuals (i.e., predicted age minus actual age) for both Ridge and XGBoost models and examine their distribution across sexes. Kernel density plots are used to visualize potential distributional shifts, while both parametric (t-test) and non-parametric (Wilcoxon rank-sum test) statistical tests are conducted to assess whether residuals significantly differ by sex.
-
-```{r}
-# Calculate residuals for each model
-valid_preds <- valid_preds %>%
-  mutate(
-    Ridge_Resid = Ridge_Pred - age,
-    XGB_Resid   = XGB_Pred   - age
-  )
-
-# Density plot of Ridge residuals by sex
-ggplot(valid_preds, aes(x = Ridge_Resid, fill = sex)) +
-  geom_density(alpha = 0.4) +
-  labs(title = "Ridge Residual Density by Sex", x = "Residual") +
-  theme_minimal()
-
-# Density plot of XGBoost residuals by sex
-ggplot(valid_preds, aes(x = XGB_Resid, fill = sex)) +
-  geom_density(alpha = 0.4) +
-  labs(title = "XGBoost Residual Density by Sex", x = "Residual") +
-  theme_minimal()
 
 # Statistical tests for Ridge residuals by sex
 t.test(Ridge_Resid ~ sex, data = valid_preds)        # Parametric
@@ -955,42 +490,13 @@ To investigate whether model performance varies by age group and sex, the valida
 ```{r}
 # Create age groups and compute RMSE within each group and sex
 valid_preds <- valid_preds %>%
-  mutate(AgeGroup = cut(age,
-                        breaks = c(5, 8, 12, 16, 21),
-                        labels = c("5-8", "9-12", "13-16", "17-21")))
-
-age_rmse <- valid_preds %>%
-  filter(!is.na(AgeGroup)) %>%   # Exclude NA age groups
-  group_by(sex, AgeGroup) %>%
-  summarise(
-    Ridge_RMSE = sqrt(mean(Ridge_Resid^2)),
-    XGB_RMSE   = sqrt(mean(XGB_Resid^2)),
-    .groups    = "drop"
-  ) %>%
-  pivot_longer(cols = starts_with(c("Ridge", "XGB")),
+  mu
                names_to = "Model",
                values_to = "RMSE")
 
 # Bar plot of RMSE by age group and sex
 ggplot(age_rmse, aes(x = AgeGroup, y = RMSE, fill = sex)) +
-  geom_col(position = "dodge") +
-  facet_wrap(~ Model) +
-  labs(title = "RMSE by Age Group & Sex", x = "Age Group", y = "RMSE") +
-  theme_minimal()
 
-```
-
-To explore age-dependent variation in model performance, we stratified the validation set into four age groups and computed RMSE for each sex within each stratum. Results show that the Ridge model exhibited the highest prediction error in the youngest group (ages 5–8), with male participants experiencing noticeably larger RMSE than females. For older children and adolescents, Ridge performance became more consistent across sexes, although small differences persisted.
-
-In contrast, the XGBoost model demonstrated lower overall RMSE across all age groups, particularly in the middle ranges (ages 9–16). Notably, sex differences were relatively minor within XGBoost, with a slight female advantage in younger cohorts and a slight male advantage among older adolescents. These findings highlight both age- and sex-specific error patterns, suggesting that nonlinear models may be more robust across heterogeneous subpopulations.
-
-## 5.2 Feature Space Differences via PCA
-
-### 5.2.1 Density Plots of Principal Components by Sex
-
-To examine whether the latent connectome representations differ systematically by sex, we project the validation data onto the first five principal components (PCs) derived from the full training set. We then visualize the distribution of each PC using kernel density plots, stratified by sex. These plots allow for a qualitative assessment of whether structural brain connectivity patterns exhibit sex-specific variation in the low-dimensional feature space.
-
-```{r}
 # Extract first 5 PCs and attach sex label
 pc_df <- as_tibble(predict(pcs,
                            select(valid, starts_with("V")))[, 1:5]) %>%
@@ -1162,47 +668,8 @@ edges_df <- igraph::as_data_frame(g_full, what = "edges") %>%
   as_tibble() %>%
   slice_max(abs(weight), n = 50)
 
-# Induce subgraph on nodes involved in top edges
-nodes_to_keep <- unique(c(edges_df$from, edges_df$to))
-g_sub <- induced_subgraph(g_full, vids = as.integer(nodes_to_keep))
-E(g_sub)$weight <- abs(E(g_sub)$weight)
-
-# Plot subnetwork with edge width & color mapped to weight
-g_sub %>%
-  as_tbl_graph() %>%
-  ggraph(layout = "fr") +
-  geom_edge_link(aes(edge_width = weight, edge_color = weight),
-                 show.legend = FALSE, alpha = 0.8) +
-  scale_edge_color_gradient2(low = "blue", mid = "white", high = "red") +
-  geom_node_point(size = 3) +
-  geom_node_text(aes(label = name), repel = TRUE, size = 3) +
-  theme_graph() +
-  labs(title = "Subnet: Top 50 Male–Female Connectivity Differences")
-
-```
-
-We constructed a subnetwork comprising the 50 brain connections with the largest absolute differences in mean connectivity between male and female participants. The resulting graph reveals that connectivity differences are not randomly scattered but instead concentrated around a few hub-like nodes, such as Node 192, 61, and 69. These nodes exhibit disproportionately higher connectivity divergence and may play a central role in sex-specific brain development. Moreover, the asymmetrical and dense structure of this subgraph suggests localized rather than global sex differences in connectome organization. These findings highlight potential regions of interest for future neurobiological investigations into sex-related functional specialization.
-
-### 5.4.3 Barplot of Top 10 Connectivity Differences
-
-For further clarity, we summarize the top 10 brain region pairs with the largest sex-based differences in connectome strength. This barplot provides a ranked view of the most prominent edges contributing to network-level distinctions between male and female participants.
-
-```{r}
-# Barplot for the 10 largest absolute connectivity differences
-edges_df %>%
-  mutate(pair = paste0(from, "–", to)) %>%
-  arrange(desc(abs(weight))) %>%
-  slice_head(n = 10) %>%
-  ggplot(aes(x = reorder(pair, abs(weight)), y = abs(weight))) +
-  geom_col(fill = "steelblue") +
-  coord_flip() +
-  labs(title = "Top 10 Brain Connections with Largest Sex Differences",
-       x = "Brain Region Pair", y = "Absolute Difference") +
-  theme_minimal()
-
-```
-
-The bar chart summarizes the top 10 brain region pairs exhibiting the largest absolute differences in mean connectivity between male and female participants. Notably, the connection between regions 77 and 81 shows the most pronounced sex difference, with an absolute divergence exceeding 0.15. Several other region pairs involving node 61 (e.g., 61–76, 61–78, 61–69) also appear prominently, reinforcing its potential role as a sex-sensitive hub. These findings complement the subnetwork visualization and suggest that specific neural circuits, rather than diffuse patterns, account for most of the observed sex-based connectivity disparities. Such localized differences may be critical for understanding functional specialization in brain development across sexes.
+ngs highlight potential regions of interest for future neurobiological investigations into sex-related functional specialization.
+est absolute differences in mean connectivity between male and female participants. Notably, the connection between regions 77 and 81 shows the most pronounced sex difference, with an absolute divergence exceeding 0.15. Several other region pairs involving node 61 (e.g., 61–76, 61–78, 61–69) also appear prominently, reinforcing its potential role as a sex-sensitive hub. These findings complement the subnetwork visualization and suggest that specific neural circuits, rather than diffuse patterns, account for most of the observed sex-based connectivity disparities. Such localized differences may be critical for understanding functional specialization in brain development across sexes.
 
 ## 5.5 Summary of Sex Differences Findings
 
