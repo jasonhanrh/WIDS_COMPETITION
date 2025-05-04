@@ -28,46 +28,14 @@ library(ParBayesianOptimization)
 
 # 2. 🧹 数据读取与预处理
 
-```{r}
-df <- readRDS("train_df.rds")
-train_idx <- createDataPartition(df$sex, p = 0.8, list = FALSE)
-train <- df[train_idx, ]
-valid <- df[-train_idx, ]
-```
+
 
 # 3. 🔍 PCA降维（保留90%信息）
 
-```{r}
-pcs <- prcomp(select(train, starts_with("V")), center = TRUE, scale. = TRUE)
-explained_var <- summary(pcs)$importance[2, ]
-cum_explained <- cumsum(explained_var)
-n_pcs_90 <- which(cum_explained >= 0.90)[1]
-cat("✅ 建议保留的主成分数量:", n_pcs_90, "\n")
 
-train_pc <- as_tibble(pcs$x[, 1:n_pcs_90])
-valid_pc <- predict(pcs, select(valid, starts_with("V")) %>% scale(center = pcs$center, scale = pcs$scale))[, 1:n_pcs_90] %>% as_tibble()
-```
 
 # 4. 🧠 元数据处理 + 编码
 
-```{r}
-prepare_meta <- function(df) {
-  df %>%
-    select(participant_id, sex, bmi, p_factor_fs, internalizing_fs, externalizing_fs, attention_fs,
-           race, study_site, handedness, parent_1_education) %>%
-    mutate(
-      bmi = ifelse(is.na(bmi), median(bmi, na.rm = TRUE), bmi),
-      across(c(sex, race, study_site, handedness, parent_1_education), ~ fct_na_value_to_level(factor(.), "Missing"))
-    )
-}
-encode <- function(data) model.matrix(~ . -1, data = data)
-
-train_meta <- prepare_meta(train)
-valid_meta <- prepare_meta(valid)
-
-train_meta_enc <- bind_cols(as_tibble(encode(train_meta %>% select(-participant_id))), tibble(participant_id = train_meta$participant_id))
-valid_meta_enc <- bind_cols(as_tibble(encode(valid_meta %>% select(-participant_id))), tibble(participant_id = valid_meta$participant_id))
-```
 
 # 5. 🔗 合并PCA和元数据
 
@@ -106,18 +74,6 @@ print(lasso_selected)
 X_train_mat <- as.matrix(X_train)
 X_valid_mat <- as.matrix(X_valid)
 # 手动创建固定的foldid
-set.seed(42)
-foldid <- sample(rep(1:10, length.out = length(y_train)))  # 10折分配
-
-# 用foldid跑cv_ridge
-cv_ridge <- cv.glmnet(
-  X_train_mat, y_train, 
-  alpha = 0, 
-  nfolds = 10,  # 不用改，保险
-  foldid = foldid,  # ⭐ 关键：传入固定的fold
-  standardize = TRUE,
-  type.measure = "mse"
-)
 
 ridge_pred <- predict(cv_ridge, newx = X_valid_mat, s = "lambda.min") %>% as.vector()
 ridge_rmse <- rmse(y_valid, ridge_pred)
@@ -137,16 +93,6 @@ print(ridge_plot)
 ## 7.2 Ridge (PCA + Lasso筛选Metadata)
 
 ```{r}
-X_train_lasso_meta <- X_train_meta[, lasso_selected]
-X_valid_lasso_meta <- X_valid %>% select(all_of(colnames(X_train_lasso_meta)))
-
-X_train_lasso_pca <- cbind(train_pc, X_train_lasso_meta)
-X_valid_lasso_pca <- cbind(valid_pc, X_valid_lasso_meta)
-
-X_train_lasso_pca_mat <- as.matrix(X_train_lasso_pca)
-X_valid_lasso_pca_mat <- as.matrix(X_valid_lasso_pca)
-
-cv_ridge_lasso_pca <- cv.glmnet(X_train_lasso_pca_mat, y_train, alpha = 0, nfolds = 10, standardize = TRUE, type.measure = "mse")
 
 ridge_lasso_pca_pred <- predict(cv_ridge_lasso_pca, newx = X_valid_lasso_pca_mat, s = "lambda.min") %>% as.vector()
 ridge_lasso_pca_rmse <- rmse(y_valid, ridge_lasso_pca_pred)
@@ -160,23 +106,7 @@ library(glmnet)
 library(caret)
 library(Metrics)
 
-# ✅ 准备 5-Fold 分割
-set.seed(42)
-folds <- createFolds(y_train, k = 5)
 
-# ✅ 存储每一折对 Validation Set 的预测
-ridge_preds <- list()
-
-# ✅ 每一折建模
-for (i in seq_along(folds)) {
-  fold_valid_idx <- folds[[i]]
-  X_tr <- X_train_lasso_pca[-fold_valid_idx, ]
-  y_tr <- y_train[-fold_valid_idx]
-  
-  ridge_model <- cv.glmnet(as.matrix(X_tr), y_tr, alpha = 0, nfolds = 5)
-  
-  ridge_pred <- predict(ridge_model, newx = as.matrix(X_valid_lasso_pca), s = "lambda.min") %>% as.vector()
-  ridge_preds[[i]] <- ridge_pred
 }
 
 # ✅ 计算平均预测 + 标准差
@@ -199,31 +129,7 @@ ggplot(data.frame(Predicted = ridge_lasso_pca_pred, Actual = y_valid), aes(x = A
 ```
 
 
-# 8. 🤖 XGBoost建模（Bayesian Optimization）
 
-```{r}
-library(xgboost)
-library(ParBayesianOptimization)
-
-set.seed(42)
-dtrain <- xgb.DMatrix(data = as.matrix(X_train), label = y_train)
-dvalid <- xgb.DMatrix(data = as.matrix(X_valid), label = y_valid)
-
-bayes_xgb_function <- function(eta, max_depth) {
-  set.seed(42)  # ⭐ 加在这里！每次调参保证同样初始化
-  params <- list(
-    booster = "gbtree", objective = "reg:squarederror", eval_metric = "rmse",
-    tree_method = "hist", eta = eta, max_depth = as.integer(max_depth),
-    subsample = 0.8, colsample_bytree = 0.8
-  )
-  model <- xgb.train(params, data = dtrain, nrounds = 100, watchlist = list(valid = dvalid),
-                     early_stopping_rounds = 10, verbose = 0)
-  list(Score = -rmse(y_valid, predict(model, dvalid)))
-}
-
-
-opt <- bayesOpt(
-  FUN = bayes_xgb_function,
   bounds = list(
     eta = c(0.03, 0.1),
     max_depth = c(3L, 6L)
@@ -233,15 +139,7 @@ opt <- bayesOpt(
 
 best_params <- getBestPars(opt)
 
-xgb_final <- xgb.train(
-  params = list(
-    booster = "gbtree", objective = "reg:squarederror", eval_metric = "rmse",
-    eta = best_params$eta, max_depth = as.integer(best_params$max_depth),
-    subsample = 0.8, colsample_bytree = 0.8, tree_method = "hist"
-  ),
-  data = dtrain, nrounds = 200, watchlist = list(valid = dvalid),
-  early_stopping_rounds = 10, verbose = 1
-)
+
 
 xgb_pred <- predict(xgb_final, newdata = dvalid)
 xgb_rmse <- rmse(y_valid, xgb_pred)
@@ -260,16 +158,7 @@ print(xgb_plot)
 # 9. 🔁 模型融合：Ridge + XGBoost
 
 ```{r}
-weights <- seq(0, 0.95, by = 0.05)
-ensemble_rmse <- sapply(weights, function(w) {
-  rmse(y_valid, w * ridge_lasso_pca_pred + (1 - w) * xgb_pred)
-})
-
-best_w <- weights[which.min(ensemble_rmse)]
-cat("✅ 最佳融合权重 w =", best_w, "对应 RMSE =", round(min(ensemble_rmse), 4), "\n")
-
-# 融合可视化
-ensemble_plot <- ggplot(data.frame(Weight = weights, RMSE = ensemble_rmse), aes(x = Weight, y = RMSE)) +
+rame(Weight = weights, RMSE = ensemble_rmse), aes(x = Weight, y = RMSE)) +
   geom_line() +
   geom_point() +
   geom_vline(xintercept = best_w, linetype = "dashed", color = "red") +
@@ -335,24 +224,7 @@ stack_train <- data.frame(
 
 dstack <- xgb.DMatrix(as.matrix(stack_train), label = y_valid)
 
-meta_xgb <- xgb.train(
-  params = list(
-    booster = "gbtree",
-    objective = "reg:squarederror",
-    eta = 0.05,
-    max_depth = 2,
-    subsample = 1,
-    colsample_bytree = 1,
-    eval_metric = "rmse"
-  ),
-  data = dstack,
-  nrounds = 100,
-  verbose = 0
-)
 
-final_pred <- predict(meta_xgb, newdata = dstack)
-stacking_rmse <- rmse(y_valid, final_pred)
-cat("✅ Upgraded Stacking Ensemble 验证集 RMSE:", round(stacking_rmse, 4), "\n")
 ```
 
 
